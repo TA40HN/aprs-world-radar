@@ -13,6 +13,12 @@ struct UiState {
   const FollowedStation* me = nullptr;
   const Trail* trail = nullptr;
   const NetStatus* net = nullptr;
+  const MessageLog* messages = nullptr;
+  const AprsIsStatus* aprsis = nullptr;
+  const Weather* wx = nullptr;
+  const SatPass* sat = nullptr;
+  int64_t epoch = 0;       // Unix seconds, 0 unknown
+  int32_t utcOffsetS = 0;  // local time - UTC
   uint32_t nowMs = 0;
   int localMin = -1;  // minutes since local midnight, -1 unknown
   ScreenId screen = SCR_APRS;

@@ -64,7 +64,9 @@ void handleRoot() {
     Lock l;
     if (g.net.wifi) b += String(" · ") + g.net.ssid + " · " + g.net.ip;
   }
-  b += " · <a href=/trails>";
+  b += " · <a href=/messages>";
+  b += tr ? "Mesajlar" : "Messages";
+  b += "</a> · <a href=/trails>";
   b += tr ? "Sürüş izleri" : "Drive trails";
   b += "</a></div><form method=post action=/save>";
   b += tr ? "<h2>Wi-Fi (ev + telefon hotspot)</h2>" : "<h2>Wi-Fi (home + phone hotspot)</h2>";
@@ -93,7 +95,8 @@ void handleRoot() {
   b += "</div>";
   b += tr ? "<h2>Ekranlar</h2>" : "<h2>Screens</h2>";
   const char* names[SCR_COUNT][2] = {{"APRS radar", "APRS radar"}, {"Air traffic", "Hava trafiği"}, {"Drive", "Sürüş"},
-                                     {"Trail", "İz"},              {"My station", "İstasyonum"},     {"aprs.world promo", "aprs.world tanıtım"}};
+                                     {"Trail", "İz"},              {"My station", "İstasyonum"},     {"aprs.world promo", "aprs.world tanıtım"},
+                                     {"Messages", "Mesajlar"},     {"Weather", "Hava durumu"},       {"Satellite passes", "Uydu geçişleri"}};
   for (int i = 0; i < SCR_COUNT; i++) {
     char n[8];
     snprintf(n, sizeof n, "scr%d", i);
@@ -104,6 +107,20 @@ void handleRoot() {
        "</div></div>";
   b += field(tr ? "Ekran değiştirme (sn, 0 = sadece buton)" : "Change screen every (s, 0 = button only)", "cyc", String(cfg.cycleS), "number",
              "min=0 max=120");
+  b += "<h2>APRS-IS</h2>";
+  b += check(tr ? "APRS-IS'e bağlan: çağrı işaretine gelen mesajlar (otomatik ack)" : "Connect to APRS-IS: messages to your callsign (auto-ack)", "ais",
+             cfg.aprsis);
+  b += check(tr ? "Araç takibi: GPS konumunu SmartBeaconing ile gönder (demo konumu asla gönderilmez)"
+                : "Tracker: send the GPS position with SmartBeaconing (a demo position is never sent)",
+             "bcn", cfg.beacon);
+  b += "<div class=row><div>" + field(tr ? "Giriş/beacon çağrı işareti (SSID ile, ör. TA1ABC-9)" : "Login/beacon callsign (with SSID, e.g. N0CALL-9)", "bcall",
+                                        esc(cfg.beaconCall), "text", "autocapitalize=characters") +
+       "</div><div style=\"flex:0 0 90px\">" + field(tr ? "Sembol" : "Symbol", "sym", esc(cfg.symbol), "text", "maxlength=2") + "</div></div>";
+  b += field(tr ? "Beacon yorumu" : "Beacon comment", "cmt", esc(cfg.comment), "text", "maxlength=43");
+  b += "<div class=muted>";
+  b += tr ? "Passcode çağrı işaretinden otomatik hesaplanır. Lisanslı radyo amatörleri içindir." : "The passcode is computed from the callsign. For licensed radio amateurs.";
+  b += "</div>";
+  b += field(tr ? "Uydular (NORAD numaraları, virgülle; 25544 = ISS)" : "Satellites (NORAD numbers, comma-separated; 25544 = ISS)", "sats", esc(cfg.sats));
   b += tr ? "<h2>Cihaz</h2>" : "<h2>Device</h2>";
   b += String("<label>") + (tr ? "Dil" : "Language") + "</label><select name=lang><option value=0" + (cfg.lang == 0 ? " selected" : "") +
        ">English</option><option value=1" + (cfg.lang == 1 ? " selected" : "") + ">Türkçe</option></select>";
@@ -157,13 +174,22 @@ void handleSave() {
   s.homeSet = !lat.isEmpty() && !lon.isEmpty() && la >= -90 && la <= 90 && lo >= -180 && lo <= 180 && !(la == 0 && lo == 0);
   s.homeLat = s.homeSet ? la : 0;
   s.homeLon = s.homeSet ? lo : 0;
-  s.screens = 0;
+  bool any = false;
   for (int i = 0; i < SCR_COUNT; i++) {
     char n[8];
     snprintf(n, sizeof n, "scr%d", i);
-    if (server.hasArg(n)) s.screens |= 1 << i;
+    s.setEnabled((ScreenId)i, server.hasArg(n));
+    any |= server.hasArg(n);
   }
-  if (!s.screens) s.screens = 1 << SCR_APRS;
+  if (!any) s.setEnabled(SCR_APRS, true);
+  s.aprsis = server.hasArg("ais");
+  s.beacon = server.hasArg("bcn");
+  copyArg("bcall", s.beaconCall, sizeof s.beaconCall);
+  for (char* p = s.beaconCall; *p; p++) *p = (char)toupper(*p);
+  copyArg("sym", s.symbol, sizeof s.symbol);
+  if (strlen(s.symbol) != 2) snprintf(s.symbol, sizeof s.symbol, "%s", Settings{}.symbol);
+  copyArg("cmt", s.comment, sizeof s.comment);
+  copyArg("sats", s.sats, sizeof s.sats);
   s.aprsRadiusKm = (uint16_t)argLong("ar", 5, 500, s.aprsRadiusKm);
   s.airRadiusKm = (uint16_t)argLong("rr", 5, 460, s.airRadiusKm);
   s.cycleS = (uint8_t)argLong("cyc", 0, 120, s.cycleS);
@@ -266,6 +292,60 @@ void handleTrailGpx() {
   f.close();
 }
 
+// /messages: the conversation log and a form to send. Sending needs APRS-IS on; the radio-side rules (printable ASCII,
+// 67 characters) are applied in aprsisSend.
+void handleMessages() {
+  bool tr = cfg.lang == 1;
+  if (server.method() == HTTP_POST) {
+    char to[10], text[68];
+    copyArg("to", to, sizeof to);
+    copyArg("text", text, sizeof text);
+    aprsisSend(to, text);
+    server.sendHeader("Location", "/messages", true);
+    server.send(303, "text/plain", "");
+    return;
+  }
+  static MessageLog log;
+  AprsIsStatus st;
+  {
+    Lock l;
+    log = g.messages;
+    st = g.aprsis;
+  }
+  String b = String("<h1>") + (tr ? "Mesajlar" : "Messages") + "</h1><p class=muted><a href=/>&larr;</a> · APRS-IS: ";
+  if (!cfg.aprsis) b += tr ? "kapalı (ayarlardan açın)" : "off (turn it on in settings)";
+  else if (!st.connected) b += tr ? "bağlanıyor…" : "connecting…";
+  else b += String(st.verified ? (tr ? "bağlı, doğrulandı · " : "connected, verified · ") : (tr ? "bağlı, doğrulanmadı · " : "connected, unverified · ")) +
+            esc(st.server);
+  b += String(" · ") + esc(cfg.loginCall()) + " · <a href=/messages>" + (tr ? "yenile" : "refresh") + "</a></p>";
+  if (cfg.aprsis) {
+    b += "<form method=post action=/messages>" + field(tr ? "Alıcı" : "To", "to", "", "text", "required maxlength=9 autocapitalize=characters") +
+         field(tr ? "Mesaj (en fazla 67 karakter)" : "Message (up to 67 characters)", "text", "", "text", "required maxlength=67") + "<button>" +
+         (tr ? "Gönder" : "Send") + "</button></form>";
+  }
+  int64_t now = epochNow();
+  b += "<div style=\"margin-top:18px\">";
+  if (!log.count) b += String("<p class=muted>") + (tr ? "Henüz mesaj yok." : "No messages yet.") + "</p>";
+  for (int i = 0; i < log.count; i++) {
+    const AprsMessage& m = log.items[i];
+    const char* state = "";
+    if (m.outgoing) {
+      switch (m.state) {
+        case MsgState::Acked: state = tr ? "iletildi" : "delivered"; break;
+        case MsgState::Failed: case MsgState::Rejected: state = tr ? "iletilemedi" : "failed"; break;
+        default: state = tr ? "gönderiliyor" : "sending";
+      }
+    }
+    char age[40] = "";
+    if (now && m.epoch) snprintf(age, sizeof age, "%lld %s", (long long)((now - m.epoch) / 60), tr ? "dk önce" : "min ago");
+    b += String("<div style=\"padding:10px 0;border-bottom:1px solid #16514c\"><b style=\"color:") + (m.outgoing ? "#9fc7c2" : "#2ee6c8") + "\">" +
+         (m.outgoing ? "→ " : "") + esc(m.outgoing ? m.to : m.from) + "</b> <span class=muted>" + age + " " + state + "</span><div>" + esc(m.text) +
+         "</div></div>";
+  }
+  b += "</div>";
+  sendPage(b);
+}
+
 void handleStatus() {
   JsonDocument d;
   {
@@ -299,6 +379,7 @@ void portalBegin() {
   server.on("/trail.json", HTTP_GET, handleTrailJson);
   server.on("/trail.gpx", HTTP_GET, handleTrailGpx);
   server.on("/status.json", HTTP_GET, handleStatus);
+  server.on("/messages", HTTP_ANY, handleMessages);
   server.onNotFound([] {
     if (apActive) {  // captive portal: every probe URL lands on the setup page
       server.sendHeader("Location", "http://192.168.4.1/", true);

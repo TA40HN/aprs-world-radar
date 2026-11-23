@@ -11,8 +11,15 @@ phone hotspot.
 | Air traffic | Aircraft with heading, one-minute speed vector, colour by altitude, traffic beyond the ring as rim dots |
 | Drive | Speed, heading tape, nearest APRS station and aircraft with direction arrows, trip distance |
 | Trail | Your drive drawn on a grid (last minute highlighted, gaps over 30 s left open), distance, time, average speed |
+| Messages | APRS messages to your callsign over APRS-IS, acknowledged for you; reply from the setup page |
+| Weather | The nearest APRS weather station: temperature, wind, pressure, humidity, rain, 24 h graph |
+| Satellite | The next pass of the ISS (or any NORAD number): countdown, sky track, maximum elevation |
 | My station | Your callsign, last heard, device, packet count, QR code to your aprs.world page |
 | aprs.world | Logo and a QR code to the live map |
+
+With a GPS module and APRS-IS turned on, the device can also be your **car tracker**: it beacons the GPS position to
+APRS-IS with SmartBeaconing (tocall `APZAPW`, the passcode is computed from your callsign). A demo or followed position
+is never sent. For licensed radio amateurs.
 
 Position is taken from the first available source: GPS module → your tracker's last APRS position (aprs.world) → home
 coordinates → the city-level location of your internet connection. With no setup beyond Wi-Fi it already works.
@@ -80,7 +87,9 @@ point; holding again restarts.
 ## Privacy
 
 Requests carry your position rounded to about 1 km (two decimals). They go only to `api.aprs.world`, `aprs.world`
-(the connection-location lookup) and `api.adsb.lol`. Demo drive also asks `router.project-osrm.org` once per boot, over
+(the connection-location lookup), `api.adsb.lol` and `celestrak.org` (orbit data, no position). With APRS-IS on, the
+device keeps one connection to `rotate.aprs2.net` filtered to messages for your callsign; your exact position goes there
+only when you turn the tracker on. Demo drive also asks `router.project-osrm.org` once per boot, over
 plain HTTP because that server only speaks TLS 1.3; the position it sends is rounded to about 100 m. Drive trails stay on the device until you download them.
 
 ## Development
@@ -96,5 +105,6 @@ plain HTTP because that server only speaks TLS 1.3; the position it sends is rou
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). Aircraft data © adsb.lol contributors, ODbL 1.0. Demo routes © OpenStreetMap contributors
+MIT, see [LICENSE](LICENSE). SGP4 orbit model: Hopperpop Sgp4 library (MIT). Orbit data: CelesTrak. Aircraft data ©
+adsb.lol contributors, ODbL 1.0. Demo routes © OpenStreetMap contributors
 (ODbL), routed by OSRM. Font: Inter, SIL OFL 1.1.

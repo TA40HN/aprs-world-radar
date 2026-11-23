@@ -191,6 +191,45 @@ bool followed(R& in, int64_t nowEpoch, FollowedStation& out) {
   return true;
 }
 
+// GET /api/stations/:callsign/weather?hours=24 (samples oldest first) → the newest value of every field and the
+// temperature averaged per hour.
+template <class R>
+bool weather(R& in, int64_t nowEpoch, Weather& out) {
+  float sum[24] = {0};
+  int cnt[24] = {0};
+  JsonDocument filter;
+  for (const char* k : {"time", "temp_c", "humidity", "pressure_hpa", "wind_dir_deg", "wind_speed_ms", "wind_gust_ms", "rain_1h_mm", "rain_24h_mm"}) filter[k] = true;
+  out.sampleEpoch = 0;
+  if (openArray(in, "samples")) {
+    JsonDocument doc;
+    do {
+      if (deserializeJson(doc, in, DeserializationOption::Filter(filter)) != DeserializationError::Ok) return false;
+      int64_t t = isoToEpoch(doc["time"]);
+      if (!t) continue;
+      out.sampleEpoch = t;
+      auto take = [&](const char* k, float& dst) {
+        if (!doc[k].isNull()) dst = doc[k].as<float>();
+      };
+      take("temp_c", out.tempC);
+      take("humidity", out.humidity);
+      take("pressure_hpa", out.pressureHpa);
+      take("wind_dir_deg", out.windDir);
+      take("wind_speed_ms", out.windMs);
+      take("wind_gust_ms", out.gustMs);
+      take("rain_1h_mm", out.rain1h);
+      take("rain_24h_mm", out.rain24h);
+      int64_t hoursAgo = nowEpoch > t ? (nowEpoch - t) / 3600 : 0;
+      if (hoursAgo < 24 && !doc["temp_c"].isNull()) {
+        sum[hoursAgo] += doc["temp_c"].as<float>();
+        cnt[hoursAgo]++;
+      }
+    } while (nextElement(in));
+  }
+  for (int h = 0; h < 24; h++) out.hourly[h] = cnt[h] ? sum[h] / cnt[h] : NAN;
+  out.ok = out.sampleEpoch != 0;
+  return true;
+}
+
 // Google encoded polyline (precision 5) → up to `cap` points, evenly thinned when longer. Returns the count.
 inline int polyline(const char* p, float* lat, float* lon, int cap) {
   auto next = [&](const char*& q, int32_t& v) {

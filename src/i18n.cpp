@@ -40,7 +40,29 @@ const Pair kStrings[] = {
   {"open source", "açık kaynak"},
   {"Settings", "Ayarlar"},
   {"Speed", "Hız"},
+  {"MESSAGES", "MESAJLAR"},
+  {"WEATHER", "HAVA"},
+  {"SATELLITE", "UYDU"},
+  {"No messages yet", "Henüz mesaj yok"},
+  {"Send one: aprs-radar.local/messages", "Mesaj gönder: aprs-radar.local/messages"},
+  {"APRS-IS off (settings)", "APRS-IS kapalı (ayarlar)"},
+  {"connecting", "bağlanıyor"},
+  {"unverified", "doğrulanmadı"},
+  {"sending", "gönderiliyor"},
+  {"delivered", "iletildi"},
+  {"failed", "iletilemedi"},
+  {"No weather station nearby", "Yakında hava istasyonu yok"},
+  {"Wind", "Rüzgar"},
+  {"Pressure", "Basınç"},
+  {"Humidity", "Nem"},
+  {"Rain", "Yağmur"},
+  {"Next pass", "Sonraki geçiş"},
+  {"LIVE", "CANLI"},
+  {"max", "en yüksek"},
+  {"Waiting for orbit data", "Yörünge verisi bekleniyor"},
+  {"in", "kaldı"},
 };
+static_assert(sizeof(kStrings) / sizeof(kStrings[0]) == (int)S::Count, "one string pair per S key");
 }  // namespace
 
 const char* tr(S key, uint8_t lang) {

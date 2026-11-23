@@ -3,6 +3,7 @@
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <NetworkClientSecure.h>
+#include <Sgp4.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <math.h>
@@ -181,6 +182,112 @@ bool fetchDemoRoute(double lat, double lon) {
   return ok;
 }
 
+// Weather of the nearest APRS weather station in the current station list.
+bool fetchWeather() {
+  static Weather buf;
+  buf = Weather{};
+  {
+    Lock l;
+    for (int i = 0; i < g.stations.count; i++) {  // sorted by distance
+      const Station& s = g.stations.items[i];
+      if (s.kind != StationKind::Weather) continue;
+      snprintf(buf.call, sizeof buf.call, "%s", s.call);
+      buf.distKm = s.distKm;
+      buf.bearing = s.bearing;
+      break;
+    }
+  }
+  if (!buf.call[0]) return false;
+  char url[96];
+  snprintf(url, sizeof url, "https://" API_HOST "/api/stations/%s/weather?hours=24", buf.call);
+  bool ok = httpGet(url, [&](NetReader& r) { return parse::weather(r, epochNow(), buf); });
+  Lock l;
+  if (ok) g.wx = buf;
+  g.dataVersion++;
+  return ok;
+}
+
+// ---- satellites: TLEs from CelesTrak, passes by SGP4 (Hopperpop Sgp4, MIT) ----
+struct Tle {
+  char name[25], l1[130], l2[130];
+};
+Tle tles[3];
+int tleCount = 0;
+
+bool readLine(NetReader& r, char* out, size_t cap) {
+  size_t n = 0;
+  for (int ch; (ch = r.read()) >= 0 && ch != '\n';)
+    if (ch != '\r' && n < cap - 1) out[n++] = (char)ch;
+  out[n] = 0;
+  while (n > 0 && out[n - 1] == ' ') out[--n] = 0;
+  return n > 0;
+}
+
+bool fetchTles() {
+  static Tle got[3];
+  int n = 0;
+  char list[sizeof cfg.sats];
+  snprintf(list, sizeof list, "%s", cfg.sats);
+  for (char* tok = strtok(list, ", "); tok && n < 3; tok = strtok(nullptr, ", ")) {
+    long id = atol(tok);
+    if (id <= 0) continue;
+    char url[96];
+    snprintf(url, sizeof url, "https://celestrak.org/NORAD/elements/gp.php?CATNR=%ld&FORMAT=TLE", id);
+    Tle& t = got[n];
+    bool ok = httpGet(url, [&](NetReader& r) {
+      return readLine(r, t.name, sizeof t.name) && readLine(r, t.l1, sizeof t.l1) && readLine(r, t.l2, sizeof t.l2) && t.l1[0] == '1' &&
+             t.l2[0] == '2' && strlen(t.l1) >= 69 && strlen(t.l2) >= 69;
+    }, Trust::Bundle);
+    if (ok) n++;
+  }
+  if (!n) return false;
+  memcpy(tles, got, sizeof got);
+  tleCount = n;
+  return true;
+}
+
+// The next pass (or the one in progress) of each satellite above the horizon at `p`; the soonest wins.
+void predictPasses(const Position& p) {
+  int64_t now = epochNow();
+  if (!tleCount || !now || !p.valid) return;
+  static Sgp4 sgp;
+  static SatPass best, cand;
+  best = SatPass{};
+  for (int i = 0; i < tleCount; i++) {
+    static Tle t;
+    t = tles[i];  // init() rewrites the TLE lines in place
+    sgp.site(p.lat, p.lon, 0);
+    if (!sgp.init(t.name, t.l1, t.l2)) continue;
+    sgp.initpredpoint((unsigned long)(now - 1200), 0.0);  // 20 min back: a pass in progress is found too
+    passinfo pass;
+    bool found = false;
+    for (int k = 0; k < 4 && !found; k++) {
+      if (!sgp.nextpass(&pass, 20)) break;
+      found = (pass.jdstop - 2440587.5) * 86400.0 > now;
+    }
+    if (!found) continue;
+    cand = SatPass{};
+    snprintf(cand.name, sizeof cand.name, "%.23s", tles[i].name);
+    cand.aos = (int64_t)((pass.jdstart - 2440587.5) * 86400.0);
+    cand.tca = (int64_t)((pass.jdmax - 2440587.5) * 86400.0);
+    cand.los = (int64_t)((pass.jdstop - 2440587.5) * 86400.0);
+    cand.maxEl = (float)pass.maxelevation;
+    cand.azAos = (float)pass.azstart;
+    cand.azLos = (float)pass.azstop;
+    cand.n = SatPass::kTrack;
+    for (int k = 0; k < cand.n; k++) {
+      sgp.findsat((unsigned long)(cand.aos + (cand.los - cand.aos) * k / (cand.n - 1)));
+      cand.az[k] = (float)sgp.satAz;
+      cand.el[k] = (float)sgp.satEl;
+    }
+    cand.ok = true;
+    if (!best.ok || cand.aos < best.aos) best = cand;
+  }
+  Lock l;
+  g.sat = best;
+  g.dataVersion++;
+}
+
 void updateStatus(bool connected) {
   Lock l;
   g.net.wifi = connected;
@@ -200,8 +307,9 @@ void netTask(void*) {
     Lock l;
     g.portalRequested = true;
   }
-  uint32_t bootMs = millis(), lastIp = 0, lastFollow = 0, lastStations = 0, lastAir = 0, lastRoute = 0;
+  uint32_t bootMs = millis(), lastIp = 0, lastFollow = 0, lastStations = 0, lastAir = 0, lastRoute = 0, lastWx = 0, lastTle = 0, lastPass = 0;
   int routeTries = 0;
+  bool wxWanted = cfg.enabled(SCR_WX), satWanted = cfg.enabled(SCR_SAT) && cfg.sats[0];
   bool timeStarted = false, mdns = false;
   Position lastStationsPos;
   bool airWanted = cfg.enabled(SCR_AIR) || cfg.enabled(SCR_DRIVE);
@@ -286,6 +394,18 @@ void netTask(void*) {
       if (airWanted && (lastAir == 0 || now - lastAir > AIRCRAFT_POLL_MS)) {
         lastAir = now;
         fetchAircraft(p);
+      }
+      if (wxWanted && g.stations.ok && (lastWx == 0 || now - lastWx > 600000)) {
+        lastWx = now;
+        fetchWeather();
+      }
+      if (satWanted && (lastTle == 0 || now - lastTle > (tleCount ? 12UL * 3600000 : 120000))) {
+        lastTle = now;
+        if (fetchTles()) lastPass = 0;
+      }
+      if (satWanted && tleCount && (lastPass == 0 || now - lastPass > 60000)) {
+        lastPass = now;
+        predictPasses(p);
       }
     }
     vTaskDelay(pdMS_TO_TICKS(250));

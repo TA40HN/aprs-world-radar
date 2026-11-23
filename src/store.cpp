@@ -11,7 +11,8 @@
 #endif
 
 namespace {
-constexpr uint32_t kSettingsVersion = 2;
+// Layout of the settings blob (settings.h is append-only). 2: up to `tz`; 3: adds APRS-IS, satellites, screens 8-15.
+constexpr uint32_t kSettingsVersion = 3;
 Preferences prefs;
 File session;
 bool fsOk = false;
@@ -30,6 +31,9 @@ void applyDefaults(Settings& s) {
 #endif
 #ifdef DEFAULT_DEMO
   s.demo = DEFAULT_DEMO;
+#endif
+#ifdef DEFAULT_APRSIS
+  s.aprsis = DEFAULT_APRSIS;
 #endif
 }
 
@@ -55,7 +59,19 @@ void pruneTrails() {
 void loadSettings(Settings& s) {
   applyDefaults(s);
   prefs.begin("radar", true);
-  if (prefs.getUInt("ver", 0) == kSettingsVersion && prefs.getBytesLength("cfg") == sizeof(Settings)) prefs.getBytes("cfg", &s, sizeof s);
+  uint32_t ver = prefs.getUInt("ver", 0);
+  size_t len = prefs.getBytesLength("cfg");
+  if (ver == kSettingsVersion && len == sizeof(Settings)) {
+    prefs.getBytes("cfg", &s, sizeof s);
+  } else if (ver == 2 && len >= offsetof(Settings, screensHi)) {
+    // An older blob loads as a prefix; only the bytes before the first layout-3 field (its tail is padding).
+    static Settings old;
+    prefs.getBytes("cfg", &old, len < sizeof old ? len : sizeof old);
+    memcpy((void*)&s, (const void*)&old, offsetof(Settings, screensHi));
+    s.setEnabled(SCR_MSG, true);  // new screens start enabled
+    s.setEnabled(SCR_WX, true);
+    s.setEnabled(SCR_SAT, true);
+  }
   prefs.end();
 }
 

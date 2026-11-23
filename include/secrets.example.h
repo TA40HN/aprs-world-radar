@@ -5,3 +5,4 @@
 #define DEFAULT_WIFI_PASS "my-password"
 // #define DEFAULT_CALLSIGN "N0CALL-9"
 // #define DEFAULT_LANG 1  // 0 English, 1 Türkçe
+// #define DEFAULT_APRSIS 1  // log in to APRS-IS for messages

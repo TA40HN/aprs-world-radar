@@ -3,7 +3,7 @@
 
 #define FW_NAME "APRS World Radar"
 #ifndef FW_VERSION
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 #endif
 
 // GMT130 1.3" 240x240 ST7789 (no CS pin) on an ESP32 DevKit V1 (WROOM-32). RST/DC avoid GPIO16/17: many boards
@@ -28,8 +28,9 @@
 #define SCREEN_W 240
 #define SCREEN_H 240
 // A full 240x240 RGB565 frame (115 200 B) is larger than the biggest free heap block of a WROOM-32, so a frame is
-// drawn in strips of this height and each strip is pushed on its own.
-#define STRIP_H 120
+// drawn in strips of this height and each strip is pushed on its own. 80 rows (38 KB) leaves the TLS handshakes,
+// the APRS-IS socket and the web server enough heap; 120 rows did not once APRS-IS was added.
+#define STRIP_H 80
 
 #define API_HOST "api.aprs.world"
 #define ADSB_HOST "api.adsb.lol"

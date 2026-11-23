@@ -654,6 +654,238 @@ void screenPromo(Canvas& c, const UiState& s) {
   footer(c, nullptr);
 }
 
+// ---------------------------------------------------------------------------------------------------------- messages
+// Draws `text` wrapped into at most `maxLines` lines of `width` px; the last line ends with "…" when cut.
+int wrapText(Canvas& c, const char* text, int x, int y, int width, int maxLines, const FontData* f, Color col) {
+  char line[72];
+  int lines = 0;
+  const char* p = text;
+  while (*p && lines < maxLines) {
+    size_t n = 0, lastSpace = 0;
+    while (p[n] && n < sizeof line - 2) {
+      line[n] = p[n];
+      line[n + 1] = 0;
+      if (Canvas::textWidth(line, f) > width) break;
+      if (p[n] == ' ') lastSpace = n;
+      n++;
+    }
+    bool more = p[n] != 0;
+    if (more && lastSpace > 0 && lines < maxLines - 1) n = lastSpace;
+    line[n] = 0;
+    if (more && lines == maxLines - 1) {
+      while (n > 0 && Canvas::textWidth(line, f) + Canvas::textWidth("…", f) > width) line[--n] = 0;
+      strcat(line, "…");
+    }
+    c.text(line, x, y + lines * (f->ascent + f->descent + 1), f, col, D_TL);
+    lines++;
+    p += n;
+    while (*p == ' ') p++;
+  }
+  return lines;
+}
+
+void screenMessages(Canvas& c, const UiState& s) {
+  uint8_t L = s.cfg->lang;
+  header(c, s, tr(S::TitleMsg, L));
+  const AprsIsStatus& st = *s.aprsis;
+  char status[48];
+  Color dot = MUTED;
+  if (!s.cfg->aprsis) snprintf(status, sizeof status, "%s", tr(S::AprsIsOff, L));
+  else if (!st.connected) snprintf(status, sizeof status, "APRS-IS · %s", tr(S::AprsIsConnecting, L)), dot = WARN;
+  else if (!st.verified) snprintf(status, sizeof status, "APRS-IS · %s", tr(S::Unverified, L)), dot = WARN;
+  else snprintf(status, sizeof status, "APRS-IS · %s", st.server), dot = GOOD;
+  c.dot(10, HEADER_H + 11, 3.5f, dot);
+  c.text(status, 18, HEADER_H + 11, &fontSmall, TEXT, D_ML);
+  c.text(s.cfg->loginCall(), 235, HEADER_H + 11, &fontSmall, MUTED, D_MR);
+  const MessageLog& log = *s.messages;
+  if (log.count == 0) {
+    centerMessage(c, 118, tr(S::NoMessages, L), s.cfg->aprsis ? tr(S::MsgHint, L) : nullptr);
+    footer(c, nullptr);
+    return;
+  }
+  int y = HEADER_H + 26;
+  for (int i = 0; i < log.count; i++) {
+    const AprsMessage& m = log.items[i];
+    bool fresh = !m.outgoing && i == 0 && s.epoch && s.epoch - m.epoch < 300;
+    int lines = i == 0 ? 2 : 1, h = 30 + lines * 16;  // the newest gets two lines of text
+    if (y + h > FOOTER_Y - 2) break;
+    c.fillRoundRect(4, y, 232, h, 7, fresh ? 0x0B2E2B : PANEL);
+    char who[24], age[24] = "";
+    snprintf(who, sizeof who, m.outgoing ? "→ %s" : "%s", m.outgoing ? m.to : m.from);
+    c.text(who, 11, y + 4, &fontTitle, m.outgoing ? MUTED : ACCENT, D_TL);
+    if (m.outgoing) {
+      S k = m.state == MsgState::Acked ? S::MsgDelivered : m.state == MsgState::Failed || m.state == MsgState::Rejected ? S::MsgFailed : S::MsgSending;
+      snprintf(age, sizeof age, "%s", tr(k, L));
+    } else if (s.epoch && m.epoch) {
+      fmtAge(age, sizeof age, (int32_t)(s.epoch - m.epoch), L);
+    }
+    Color ageCol = m.outgoing && m.state == MsgState::Acked ? GOOD : m.outgoing && m.state == MsgState::Failed ? REDC : MUTED;
+    c.text(age, 229, y + 6, &fontSmall, ageCol, D_TR);
+    wrapText(c, m.text, 11, y + 22, 218, lines, &fontBody, TEXT);
+    y += h + 4;
+  }
+  footer(c, nullptr);
+}
+
+// ---------------------------------------------------------------------------------------------------------- weather
+void screenWeather(Canvas& c, const UiState& s) {
+  const Settings& cfg = *s.cfg;
+  uint8_t L = cfg.lang;
+  header(c, s, tr(S::TitleWx, L));
+  const Weather& w = *s.wx;
+  if (!w.ok) {
+    logo(c, 120, 100, 0.45f, 1, ACCENT_DIM);
+    centerMessage(c, 160, tr(S::NoWeather, L), nullptr);
+    footer(c, nullptr);
+    return;
+  }
+  char line[64], d[12], age[24] = "";
+  fmtDist(d, sizeof d, w.distKm, cfg.metric);
+  if (s.epoch) fmtAge(age, sizeof age, (int32_t)(s.epoch - w.sampleEpoch), L);
+  snprintf(line, sizeof line, "%s · %s %s · %s", w.call, d, geo::compass8(w.bearing), age);
+  c.text(line, 120, HEADER_H + 11, &fontSmall, MUTED, D_MC);
+  // Temperature
+  char t[12];
+  if (isnan(w.tempC)) snprintf(t, sizeof t, "--");
+  else snprintf(t, sizeof t, "%.0f", cfg.metric ? w.tempC : w.tempC * 1.8f + 32);
+  int tw = c.text(t, 70, 80, &fontHuge, TEXT, D_MC);
+  c.text(cfg.metric ? "°C" : "°F", 70 + tw / 2 + 2, 58, &fontMid, ACCENT, D_TL);
+  // Wind rose: the arrow flies with the wind (from `windDir` toward the opposite side).
+  const int wx = 190, wy = 78, wr = 26;
+  c.circle(wx, wy, wr, GRID_HI);
+  c.triangle(wx, wy - wr - 1, wx - 4, wy - wr - 8, wx + 4, wy - wr - 8, ACCENT);  // north
+  if (!isnan(w.windDir) && !isnan(w.windMs) && w.windMs > 0.2f) arrow(c, wx, wy, w.windDir + 180, wr * 1.5f, ACCENT);
+  else c.dot(wx, wy, 3, MUTED);
+  char ws[24];
+  if (isnan(w.windMs)) snprintf(ws, sizeof ws, "--");
+  else snprintf(ws, sizeof ws, "%.0f %s", cfg.metric ? w.windMs * 3.6f : w.windMs * 2.23694f, cfg.metric ? "km/h" : "mph");
+  c.text(ws, wx, wy + wr + 11, &fontBody, TEXT, D_MC);
+  // Tiles
+  struct Tile { S label; float v; const char* fmt; } tiles[] = {
+    {S::Pressure, w.pressureHpa, "%.0f hPa"}, {S::Humidity, w.humidity, "%.0f%%"}, {S::Rain, isnan(w.rain24h) ? w.rain1h : w.rain24h, "%.1f mm"}};
+  for (int i = 0; i < 3; i++) {
+    int x = 4 + i * 78;
+    c.fillRoundRect(x, 132, 74, 38, 7, PANEL);
+    c.text(tr(tiles[i].label, L), x + 37, 141, &fontSmall, MUTED, D_MC);
+    char v[16];
+    if (isnan(tiles[i].v)) snprintf(v, sizeof v, "--");
+    else snprintf(v, sizeof v, tiles[i].fmt, tiles[i].v);
+    c.text(v, x + 37, 158, &fontBody, TEXT, D_MC);
+  }
+  // 24 h temperature, oldest left
+  float lo = 1e9f, hi = -1e9f;
+  for (float v : w.hourly)
+    if (!isnan(v)) lo = fminf(lo, v), hi = fmaxf(hi, v);
+  if (hi >= lo) {
+    const int gx = 30, gy = 180, gw = 180, gh = 34;
+    float span = fmaxf(hi - lo, 1.f);
+    float px = -1, py = 0;
+    for (int h = 23; h >= 0; h--) {
+      float v = w.hourly[h];
+      if (isnan(v)) { px = -1; continue; }
+      float x = gx + (23 - h) * gw / 23.f, y = gy + gh - (v - lo) / span * gh;
+      if (px >= 0) c.wideLine(px, py, x, y, 1.2f, ACCENT);
+      px = x;
+      py = y;
+    }
+    char a[8], b[8];
+    snprintf(a, sizeof a, "%.0f°", cfg.metric ? hi : hi * 1.8f + 32);
+    snprintf(b, sizeof b, "%.0f°", cfg.metric ? lo : lo * 1.8f + 32);
+    c.text(a, gx - 4, gy, &fontSmall, MUTED, D_TR);
+    c.text(b, gx - 4, gy + gh, &fontSmall, MUTED, D_MR);
+    c.text("24h", gx + gw + 4, gy + gh, &fontSmall, MUTED, D_ML);
+  }
+  footer(c, nullptr);
+}
+
+// ---------------------------------------------------------------------------------------------------------- satellite
+void skyPoint(float az, float el, int cx, int cy, int R, float& x, float& y) {
+  float r = R * (90 - fmaxf(el, 0)) / 90.f, a = rad(az);
+  x = cx + r * sinf(a);
+  y = cy - r * cosf(a);
+}
+
+void screenSatellite(Canvas& c, const UiState& s) {
+  uint8_t L = s.cfg->lang;
+  header(c, s, tr(S::TitleSat, L));
+  const SatPass& p = *s.sat;
+  if (!p.ok || !s.epoch) {
+    logo(c, 120, 100, 0.45f, 1, ACCENT_DIM);
+    centerMessage(c, 160, tr(S::NoSatData, L), s.cfg->sats);
+    footer(c, nullptr);
+    return;
+  }
+  // Sky plot: horizon ring, 30° and 60° rings, cardinal points, the predicted track.
+  const int cx = 74, cy = 122, R = 58;
+  c.disc(cx, cy, R, DISC);
+  for (int el : {0, 30, 60}) c.circle(cx, cy, R * (90 - el) / 90, el == 0 ? GRID_HI : GRID);
+  c.line(cx - R, cy, cx + R, cy, GRID);
+  c.line(cx, cy - R, cx, cy + R, GRID);
+  const char* card[] = {"N", "E", "S", "W"};
+  for (int i = 0; i < 4; i++) {
+    float a = rad(i * 90.f);
+    c.text(card[i], lroundf(cx + (R + 8) * sinf(a)), lroundf(cy - (R + 8) * cosf(a)), &fontSmall, i == 0 ? ACCENT : MUTED, D_MC);
+  }
+  float lx = 0, ly = 0;
+  for (int k = 0; k < p.n; k++) {
+    float x, y;
+    skyPoint(p.az[k], p.el[k], cx, cy, R, x, y);
+    if (k) c.wideLine(lx, ly, x, y, 1.3f, ACCENT);
+    lx = x;
+    ly = y;
+  }
+  float ax, ay, bx, by;
+  skyPoint(p.az[0], p.el[0], cx, cy, R, ax, ay);
+  skyPoint(p.az[p.n - 1], p.el[p.n - 1], cx, cy, R, bx, by);
+  c.dot(ax, ay, 3.5f, GOOD);
+  c.dot(bx, by, 3.5f, REDC);
+  bool live = s.epoch >= p.aos && s.epoch <= p.los;
+  if (live) {
+    float f = (float)(s.epoch - p.aos) / (float)(p.los - p.aos) * (p.n - 1);
+    int k = (int)f;
+    float t = f - k, az = p.az[k], el = p.el[k];
+    if (k + 1 < p.n) {
+      az = p.az[k] + (geo::wrap360(p.az[k + 1] - p.az[k] + 180) - 180) * t;
+      el = p.el[k] + (p.el[k + 1] - p.el[k]) * t;
+    }
+    float x, y, pulse = (s.nowMs % 1200) / 1200.f;
+    skyPoint(az, el, cx, cy, R, x, y);
+    c.circle(lroundf(x), lroundf(y), (int)(4 + pulse * 9), mix(DISC, TEXT, 1 - pulse));
+    c.dot(x, y, 4, TEXT);
+  }
+  // Right column
+  const int rx = 146;
+  char name[16];
+  snprintf(name, sizeof name, "%.15s", p.name);
+  if (char* sp = strchr(name, ' ')) *sp = 0;  // "ISS (ZARYA)" → "ISS"
+  c.text(name, rx, HEADER_H + 8, &fontMid, TEXT, D_TL);
+  char a[32], b[32];
+  if (live) {
+    c.text(tr(S::Live, L), rx, HEADER_H + 36, &fontTitle, REDC, D_TL);
+    int32_t left = (int32_t)(p.los - s.epoch);
+    snprintf(a, sizeof a, "%d:%02d", (int)(left / 60), (int)(left % 60));
+    c.text(a, rx, HEADER_H + 56, &fontBig, TEXT, D_TL);
+  } else {
+    c.text(tr(S::NextPass, L), rx, HEADER_H + 36, &fontSmall, MUTED, D_TL);
+    int32_t wait = (int32_t)(p.aos - s.epoch);
+    if (wait >= 3600) snprintf(a, sizeof a, "%d:%02d h", (int)(wait / 3600), (int)(wait / 60 % 60));
+    else snprintf(a, sizeof a, "%d:%02d", (int)(wait / 60), (int)(wait % 60));
+    c.text(a, rx, HEADER_H + 50, &fontBig, TEXT, D_TL);
+  }
+  int64_t aosL = p.aos + s.utcOffsetS, losL = p.los + s.utcOffsetS;
+  snprintf(a, sizeof a, "%02d:%02d → %02d:%02d", (int)(aosL / 3600 % 24), (int)(aosL / 60 % 60), (int)(losL / 3600 % 24), (int)(losL / 60 % 60));
+  c.text(a, rx, HEADER_H + 92, &fontBody, TEXT, D_TL);
+  snprintf(b, sizeof b, "%s %.0f°", tr(S::MaxElevation, L), p.maxEl);
+  c.text(b, rx, HEADER_H + 112, &fontBody, p.maxEl >= 30 ? GOOD : TEXT, D_TL);
+  snprintf(b, sizeof b, "%s → %s", geo::compass8(p.azAos), geo::compass8(p.azLos));
+  c.text(b, rx, HEADER_H + 132, &fontBody, MUTED, D_TL);
+  if (strncmp(p.name, "ISS", 3) == 0) {
+    c.text("APRS digi", rx, HEADER_H + 152, &fontSmall, MUTED, D_TL);
+    c.text("145.825 MHz", rx, HEADER_H + 166, &fontSmall, ACCENT, D_TL);
+  }
+  footer(c, nullptr);
+}
+
 // ---------------------------------------------------------------------------------------------------------- setup / splash
 void screenSetup(Canvas& c, const UiState& s) {
   uint8_t L = s.cfg->lang;
@@ -697,6 +929,9 @@ void drawFrame(Canvas& c, const UiState& s) {
     case SCR_TRAIL: return screenTrail(c, s);
     case SCR_STATION: return screenStation(c, s);
     case SCR_PROMO: return screenPromo(c, s);
+    case SCR_MSG: return screenMessages(c, s);
+    case SCR_WX: return screenWeather(c, s);
+    case SCR_SAT: return screenSatellite(c, s);
     default: return screenAprs(c, s);
   }
 }

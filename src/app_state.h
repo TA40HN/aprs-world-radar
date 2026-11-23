@@ -28,6 +28,14 @@ struct Shared {
   float routeLat[kRouteMax], routeLon[kRouteMax];
   int routeCount = 0;  // set last; the arrays are read-only once it is non-zero
   bool routeFailed = false;
+  bool posDemo = false;  // g.pos comes from the demo drive: never beaconed
+  // APRS-IS task ↔ UI/portal
+  MessageLog messages;
+  uint32_t msgVersion = 0;  // bumped for every received message
+  AprsIsStatus aprsis;
+  // Network task → UI
+  Weather wx;
+  SatPass sat;
 };
 
 extern Shared g;
@@ -47,6 +55,10 @@ void loadSettings(Settings& s);
 void saveSettings(const Settings& s);
 void storeBegin();
 void trailFlush(Trail& t, int64_t epochMs);  // appends the pending fixes to the session file
+
+// aprsis.cpp
+void aprsisBegin();
+bool aprsisSend(const char* to, const char* text);  // queues a message; false when APRS-IS is off or the log is busy
 
 // portal.cpp
 void portalBegin();

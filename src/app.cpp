@@ -26,6 +26,11 @@ AircraftList dAircraft;
 FollowedStation dMe;
 uint32_t dMeFetchedMs = 0;
 NetStatus dNet;
+MessageLog dMessages;
+AprsIsStatus dAprsis;
+Weather dWx;
+SatPass dSat;
+uint32_t seenMsgVersion = 0;
 uint32_t seenVersion = UINT32_MAX;
 
 ScreenId screen = SCR_APRS;
@@ -229,7 +234,7 @@ bool movingNow(const Position& p) { return p.valid && p.source == PosSource::Gps
 // While driving, only the screens that help on the road take part in the rotation.
 bool screenAllowed(ScreenId s, bool moving) {
   if (!cfg.enabled(s)) return false;
-  return !moving || s == SCR_APRS || s == SCR_AIR || s == SCR_DRIVE || s == SCR_TRAIL;
+  return !moving || s == SCR_APRS || s == SCR_AIR || s == SCR_DRIVE || s == SCR_TRAIL || s == SCR_MSG;
 }
 
 void nextScreen(bool moving) {
@@ -330,6 +335,19 @@ UiState baseState(const Position& pos) {
   s.me = &dMe;
   s.trail = &trail;
   s.net = &dNet;
+  s.messages = &dMessages;
+  s.aprsis = &dAprsis;
+  s.wx = &dWx;
+  s.sat = &dSat;
+  s.epoch = epochNow();
+  if (s.epoch) {
+    time_t t = (time_t)s.epoch;
+    struct tm lt, ut;
+    localtime_r(&t, &lt);
+    gmtime_r(&t, &ut);
+    int32_t d = (lt.tm_hour - ut.tm_hour) * 3600 + (lt.tm_min - ut.tm_min) * 60;
+    s.utcOffsetS = d > 12 * 3600 ? d - 86400 : d < -12 * 3600 ? d + 86400 : d;
+  }
   s.nowMs = millis();
   s.localMin = localMinutes();
   s.screen = screen;
@@ -359,6 +377,7 @@ void setup() {
 
   if (cfg.gps) gpsSerial.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
   netBegin();
+  aprsisBegin();
   portalBegin();
   Serial.printf(FW_NAME " " FW_VERSION " heap %lu, largest block %lu\n", (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMaxAllocHeap());
 
@@ -383,7 +402,7 @@ void setup() {
 
 void loop() {
   readGps();
-  bool wantPortal;
+  bool wantPortal, newMessage = false;
   {
     Lock l;
     if (seenVersion != g.dataVersion) {
@@ -393,8 +412,16 @@ void loop() {
       dMe = g.me;
       dMeFetchedMs = g.meFetchedMs;
       aircraftAlert();
+      dWx = g.wx;
+      dSat = g.sat;
     }
     dNet = g.net;
+    dMessages = g.messages;  // outgoing states change without a version bump; the copy is small
+    dAprsis = g.aprsis;
+    if (g.msgVersion != seenMsgVersion) {
+      seenMsgVersion = g.msgVersion;
+      newMessage = true;
+    }
     wantPortal = g.portalRequested;
   }
   if (wantPortal && !portalApActive()) portalStartAp();
@@ -406,6 +433,7 @@ void loop() {
   {
     Lock l;
     g.pos = pos;
+    g.posDemo = demoPos;
   }
 
   bool moving = movingNow(pos);
@@ -413,6 +441,19 @@ void loop() {
   uint32_t now = millis();
   if (!screenAllowed(screen, moving)) nextScreen(moving);
   if (cfg.cycleS && now > pauseCycleUntil && now - screenSinceMs > cfg.cycleS * 1000UL) nextScreen(moving);
+  if (newMessage && dMessages.count && !dMessages.items[0].outgoing) {
+    // A new message takes the screen for 30 s, with two beeps when the buzzer is on.
+    if (cfg.enabled(SCR_MSG)) {
+      screen = SCR_MSG;
+      screenSinceMs = now;
+      pauseCycleUntil = now + 30000;
+    }
+    if (cfg.buzzer) {
+      tone(PIN_BUZZER, 2000, 90);
+      delay(140);
+      tone(PIN_BUZZER, 2000, 90);
+    }
+  }
 
   static uint32_t lastFlush = 0, frames = 0;
   frames++;
