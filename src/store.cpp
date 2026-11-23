@@ -6,8 +6,8 @@
 
 #include "app_state.h"
 
-#if __has_include("secrets.h")
-#include "secrets.h"  // local, git-ignored defaults for your own build (include/secrets.example.h)
+#if __has_include("secrets.h") && !defined(RELEASE_BUILD)
+#include "secrets.h"  // local, git-ignored defaults for your own build (include/secrets.example.h); never in a release
 #endif
 
 namespace {

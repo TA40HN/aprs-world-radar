@@ -37,6 +37,11 @@ coordinates → the city-level location of your internet connection. With no set
 
 Pins are in `src/config.h`. In the car, power the board from a USB car charger, never straight from 12 V.
 
+## Install
+
+The easiest way: open [aprs.world/radar](https://aprs.world/radar) in Chrome, Edge or Opera, plug the board in, and
+press **Connect and install**. The same page offers the single `.bin` to write at `0x0` with any flasher.
+
 ## Build and flash
 
 [PlatformIO](https://platformio.org) is required.
@@ -48,6 +53,10 @@ pio device monitor                # serial log: Wi-Fi, every request, fps, heap
 
 Optional local defaults: copy `include/secrets.example.h` to `include/secrets.h` (git-ignored). The settings page
 overrides them.
+
+Release image: `node scripts/release.mjs [--out DIR]` builds the `release` environment, which never compiles
+`secrets.h` in, and checks the result. It writes the installer manifest, the four images and one merged
+`aprs-world-radar-<version>.bin`. The script refuses if a value from a local `secrets.h` appears in the binary.
 
 ## Setup
 
