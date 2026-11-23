@@ -220,7 +220,7 @@ void netTask(void*) {
       ipValid = g.ipValid;
       p = g.pos;
     }
-    if (!ipValid && (lastIp == 0 || now - lastIp > 120000)) {
+    if (!ipValid && (lastIp == 0 || now - lastIp > 15000)) {
       lastIp = now;
       fetchIpPosition();
     }

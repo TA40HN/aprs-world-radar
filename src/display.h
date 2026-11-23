@@ -13,7 +13,7 @@ class Display : public lgfx::LGFX_Device {
     auto b = bus_.config();
     b.spi_host = VSPI_HOST;
     b.spi_mode = 3;  // a CS-less ST7789 only latches data in SPI mode 3
-    b.freq_write = 80000000;  // VSPI on its IOMUX pins (18, 23) runs at 80 MHz; halves the 24 ms frame push
+    b.freq_write = 40000000;  // 80 MHz left the GMT130 on jumper wires blank
     b.freq_read = 16000000;
     b.pin_sclk = PIN_TFT_SCLK;
     b.pin_mosi = PIN_TFT_MOSI;
