@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "../src/parse.h"
+#include "../src/route_driver.h"
 #include "../src/ui.h"
 
 namespace {
@@ -72,23 +73,23 @@ int main() {
   printf("stations %d/%d ok=%d, aircraft %d/%d ok=%d, me %s valid=%d\n", stations.count, stations.total, stations.ok,
          aircraft.count, aircraft.total, aircraft.ok, me.call, me.valid);
 
-  // A 40-minute drive: fixes every second along a winding road, with one GPS jump that the trail must reject.
+  // A 25-minute demo drive on real roads (OSRM loop in sim/data/route.json), fixes every second, plus one GPS jump the
+  // trail must reject.
   static Trail trail;
-  double lat = 41.02, lon = 28.90, heading = 60;
+  static float rlat[300], rlon[300];
+  int rn = 0;
+  { FileReader r("sim/data/route.json"); rn = parse::route(r, rlat, rlon, 300); }
+  RouteDriver drive;
+  drive.load(rlat, rlon, rn);
   uint32_t t0 = 1000;
   int kept = 0, rejected = 0;
-  for (int i = 0; i < 2400; i++) {
-    heading += sin(i / 260.0) * 0.55 + (i % 700 == 0 ? 70 : 0);
-    double v = 12 + 8 * sin(i / 300.0);  // m/s
-    lat += v * cos(heading * geo::kDeg) / 111320.0;
-    lon += v * sin(heading * geo::kDeg) / (111320.0 * cos(lat * geo::kDeg));
-    bool jump = i == 1200;
-    double jl = jump ? lat + 0.01 : lat;  // ~1.1 km jump
-    if (i > 1500 && i < 1560) continue;   // tunnel: 60 s without fixes
-    if (trail.offer(jl, lon, jump ? 8 : 5, t0 + i * 1000)) kept++;
+  for (int i = 0; i < 1500; i++) {
+    drive.step(1.f);
+    bool jump = i == 700;
+    if (trail.offer(jump ? drive.lat() + 0.01 : drive.lat(), drive.lon(), 5, t0 + i * 1000)) kept++;
     else if (jump) rejected++;
   }
-  printf("trail: %d kept, jump rejected=%d, %.1f km\n", kept, rejected, trail.distanceKm());
+  printf("route %d points; trail: %d kept, jump rejected=%d, %.1f km\n", rn, kept, rejected, trail.distanceKm());
 
   static NetStatus net;
   net.wifi = true;
@@ -109,7 +110,7 @@ int main() {
   s.trail = &trail;
   s.net = &net;
   s.localMin = 15 * 60 + 47;
-  s.nowMs = t0 + 2400 * 1000 + 1700;
+  s.nowMs = t0 + 1500 * 1000 + 1700;
 
   s.splash = 0.35f; render(strip, full, s, "0_splash_a");
   s.splash = 1.0f; render(strip, full, s, "0_splash_b");
@@ -122,8 +123,10 @@ int main() {
 
   // In the car: GPS fix, moving north-east, heading-up radar.
   pos.source = PosSource::Gps;
-  pos.speedKmh = 87;
-  pos.course = 62;
+  pos.lat = drive.lat();
+  pos.lon = drive.lon();
+  pos.speedKmh = drive.speedKmh();
+  pos.course = drive.heading();
   s.gpsSats = 9;
   s.screen = SCR_DRIVE; render(strip, full, s, "3_drive");
   s.screen = SCR_TRAIL; render(strip, full, s, "4_trail");

@@ -6,6 +6,7 @@
 
 #include "app_state.h"
 #include "display.h"
+#include "route_driver.h"
 #include "ui.h"
 
 Shared g;
@@ -102,42 +103,71 @@ Position choosePosition() {
   return p;
 }
 
-// Simulated drive for shows and for testing without a GPS module: loops around the position it started from at
-// 40-85 km/h, turns back toward it beyond 2.5 km, and feeds the trail like real fixes (never written to flash).
+// Simulated drive for shows and for testing without a GPS module. It asks the network task for a road loop around the
+// start (OSRM) and follows it (route_driver.h); while that is pending it waits parked, and if routing fails it wanders
+// within 2.5 km. Fixes feed the trail like real ones (never written to flash).
 struct DemoDrive {
-  bool on = false;
+  bool on = false, routed = false;
   double lat0 = 0, lon0 = 0, lat = 0, lon = 0;
   float heading = 35, speed = 0, t = 0;
-  uint32_t lastMs = 0;
+  uint32_t lastMs = 0, lastFixMs = 0;
+  RouteDriver driver;
 } demo;
+
+void demoWander(float dt) {
+  demo.t += dt;
+  demo.speed = 62 + 23 * sinf(demo.t / 37.f);
+  demo.heading += sinf(demo.t / 19.f) * 3.2f * dt;
+  if (geo::distanceKm(demo.lat0, demo.lon0, demo.lat, demo.lon) > 2.5) {
+    float back = (float)geo::bearingDeg(demo.lat, demo.lon, demo.lat0, demo.lon0);
+    float diff = geo::wrap360(back - demo.heading + 180) - 180;
+    demo.heading += constrain(diff, -6 * dt, 6 * dt);
+  }
+  demo.heading = geo::wrap360(demo.heading);
+  double m = demo.speed / 3.6 * dt;
+  demo.lat += m * cos(demo.heading * geo::kDeg) / 111320.0;
+  demo.lon += m * sin(demo.heading * geo::kDeg) / (111320.0 * cos(demo.lat * geo::kDeg));
+}
 
 bool demoStep(const Position& anchor, Position& out) {
   if (!cfg.demo || gpsFix) return false;
   uint32_t now = millis();
   if (!demo.on) {
     if (!anchor.valid) return false;
-    demo = DemoDrive{};
     demo.on = true;
     demo.lat0 = demo.lat = anchor.lat;
     demo.lon0 = demo.lon = anchor.lon;
     demo.lastMs = now;
+    Lock l;
+    g.demoLat = anchor.lat;
+    g.demoLon = anchor.lon;
+    g.demoRouteWanted = true;
   }
-  if (now - demo.lastMs >= 1000) {
-    float dt = (now - demo.lastMs) / 1000.f;
-    demo.lastMs = now;
-    demo.t += dt;
-    demo.speed = 62 + 23 * sinf(demo.t / 37.f);
-    demo.heading += sinf(demo.t / 19.f) * 3.2f * dt;
-    if (geo::distanceKm(demo.lat0, demo.lon0, demo.lat, demo.lon) > 2.5) {
-      float back = (float)geo::bearingDeg(demo.lat, demo.lon, demo.lat0, demo.lon0);
-      float diff = geo::wrap360(back - demo.heading + 180) - 180;
-      demo.heading += constrain(diff, -6 * dt, 6 * dt);
+  float dt = (now - demo.lastMs) / 1000.f;
+  demo.lastMs = now;
+  bool failed;
+  {
+    Lock l;
+    if (!demo.routed && g.routeCount) {
+      demo.driver.load(g.routeLat, g.routeLon, g.routeCount);  // read-only from here on
+      demo.routed = true;
     }
-    demo.heading = geo::wrap360(demo.heading);
-    double m = demo.speed / 3.6 * dt;
-    demo.lat += m * cos(demo.heading * geo::kDeg) / 111320.0;
-    demo.lon += m * sin(demo.heading * geo::kDeg) / (111320.0 * cos(demo.lat * geo::kDeg));
-    trail.offer(demo.lat, demo.lon, 5, now);
+    failed = g.routeFailed;
+  }
+  if (demo.routed) {
+    demo.driver.step(dt);
+    demo.lat = demo.driver.lat();
+    demo.lon = demo.driver.lon();
+    demo.speed = demo.driver.speedKmh();
+    demo.heading = demo.driver.heading();
+  } else if (failed) {
+    demoWander(dt);
+  } else {
+    demo.speed = 0;  // parked until the route arrives
+  }
+  if (now - demo.lastFixMs >= 1000) {
+    demo.lastFixMs = now;
+    if (demo.speed > 0) trail.offer(demo.lat, demo.lon, 5, now);
   }
   out = Position{};
   out.valid = true;
@@ -145,9 +175,44 @@ bool demoStep(const Position& anchor, Position& out) {
   out.lat = demo.lat;
   out.lon = demo.lon;
   out.speedKmh = demo.speed;
-  out.course = demo.heading;
+  out.course = demo.speed > 0 ? demo.heading : -1;
   out.accuracyM = 5;
   return true;
+}
+
+// Distances and bearings are recomputed from where we are now (the lists were fetched up to 30 s and several km ago),
+// and aircraft are advanced along their track by ground speed since the fetch, so blips move smoothly between polls.
+template <class T>
+void sortByDistance(T* items, int n) {
+  for (int i = 1; i < n; i++)
+    for (int j = i; j > 0 && items[j - 1].distKm > items[j].distKm; j--) {
+      T tmp = items[j];
+      items[j] = items[j - 1];
+      items[j - 1] = tmp;
+    }
+}
+
+void refreshGeometry(const Position& p) {
+  if (!p.valid) return;
+  for (int i = 0; i < dStations.count; i++) {
+    Station& s = dStations.items[i];
+    s.distKm = (float)geo::distanceKm(p.lat, p.lon, s.lat, s.lon);
+    s.bearing = (float)geo::bearingDeg(p.lat, p.lon, s.lat, s.lon);
+  }
+  sortByDistance(dStations.items, dStations.count);
+  float elapsed = fminf(60.f, (millis() - dAircraft.fetchedMs) / 1000.f);
+  for (int i = 0; i < dAircraft.count; i++) {
+    Aircraft& a = dAircraft.items[i];
+    double lat = a.lat, lon = a.lon;
+    if (a.gsKt > 0 && a.track >= 0) {
+      double km = a.gsKt * 1.852 / 3600.0 * elapsed, tr = a.track * geo::kDeg;
+      lat += km * cos(tr) / 111.32;
+      lon += km * sin(tr) / (111.32 * cos(a.lat * geo::kDeg));
+    }
+    a.distKm = (float)geo::distanceKm(p.lat, p.lon, lat, lon);
+    a.bearing = (float)geo::bearingDeg(p.lat, p.lon, lat, lon);
+  }
+  sortByDistance(dAircraft.items, dAircraft.count);
 }
 
 // ------------------------------------------------------------------------------------------------ buttons
@@ -337,6 +402,7 @@ void loop() {
   static Position pos;
   pos = choosePosition();
   bool demoPos = demoStep(pos, pos);
+  refreshGeometry(pos);
   {
     Lock l;
     g.pos = pos;

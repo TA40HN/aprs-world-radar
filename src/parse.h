@@ -191,4 +191,43 @@ bool followed(R& in, int64_t nowEpoch, FollowedStation& out) {
   return true;
 }
 
+// Google encoded polyline (precision 5) → up to `cap` points, evenly thinned when longer. Returns the count.
+inline int polyline(const char* p, float* lat, float* lon, int cap) {
+  auto next = [&](const char*& q, int32_t& v) {
+    int32_t result = 0, shift = 0, b;
+    do {
+      b = *q ? *q++ - 63 : 0;
+      result |= (b & 0x1F) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    v += (result & 1) ? ~(result >> 1) : (result >> 1);
+  };
+  int total = 0;
+  int32_t la = 0, lo = 0;
+  for (const char* q = p; *q;) { next(q, la); next(q, lo); total++; }
+  int stride = total > cap ? (total + cap - 1) / cap : 1, n = 0, i = 0;
+  la = lo = 0;
+  for (const char* q = p; *q; i++) {
+    next(q, la);
+    next(q, lo);
+    if ((i % stride == 0 || !*q) && n < cap) {
+      lat[n] = la / 1e5f;
+      lon[n] = lo / 1e5f;
+      n++;
+    }
+  }
+  return n;
+}
+
+// OSRM /route/v1 answer → the road geometry of the first route.
+template <class R>
+int route(R& in, float* lat, float* lon, int cap) {
+  JsonDocument filter;
+  filter["routes"][0]["geometry"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, in, DeserializationOption::Filter(filter)) != DeserializationError::Ok) return 0;
+  const char* g = doc["routes"][0]["geometry"];
+  return g ? polyline(g, lat, lon, cap) : 0;
+}
+
 }  // namespace parse

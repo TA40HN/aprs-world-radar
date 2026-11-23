@@ -21,6 +21,13 @@ struct Shared {
   bool portalRequested = false;
   // UI → network task
   Position pos;
+  // Demo drive: the UI asks for a road loop around (demoLat, demoLon); the network task fills route* once (OSRM).
+  static constexpr int kRouteMax = 300;
+  bool demoRouteWanted = false;
+  double demoLat = 0, demoLon = 0;
+  float routeLat[kRouteMax], routeLon[kRouteMax];
+  int routeCount = 0;  // set last; the arrays are read-only once it is non-zero
+  bool routeFailed = false;
 };
 
 extern Shared g;

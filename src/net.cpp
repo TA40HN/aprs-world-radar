@@ -66,20 +66,24 @@ struct NetReader {
   }
 };
 
-// Cloudflare hosts (aprs.world) need ca_roots.h; api.adsb.lol fails mbedTLS verification against those roots yet passes
-// with the ESP-IDF bundle, which holds its ISRG roots too.
+// Trust per host: Cloudflare hosts (aprs.world) need ca_roots.h; api.adsb.lol fails mbedTLS verification against those
+// roots yet passes with the ESP-IDF bundle, which holds its ISRG roots too. router.project-osrm.org speaks only TLS 1.3,
+// which this mbedTLS build lacks, so it is fetched over plain HTTP (it carries nothing but a rounded demo position).
+enum class Trust { Roots, Bundle, PlainHttp };
+
 template <class Fn>
-bool httpGet(const char* url, Fn&& parseBody, bool idfBundle = false) {
+bool httpGet(const char* url, Fn&& parseBody, Trust trust = Trust::Roots) {
   NetworkClientSecure tls;
-  if (idfBundle) tls.useBuiltinCACertBundle();
-  else tls.setCACert(kCaRoots);
+  NetworkClient plain;
+  if (trust == Trust::Bundle) tls.useBuiltinCACertBundle();
+  else if (trust == Trust::Roots) tls.setCACert(kCaRoots);
   HTTPClient http;
   static const char* kHeaders[] = {"Transfer-Encoding"};
   http.collectHeaders(kHeaders, 1);
   http.setTimeout(10000);
   http.setUserAgent(kUserAgent);
   http.setReuse(false);
-  if (!http.begin(tls, url)) return false;
+  if (!(trust == Trust::PlainHttp ? http.begin(plain, url) : http.begin(tls, url))) return false;
   int code = http.GET();
   bool ok = false;
   if (code == 200) {
@@ -87,7 +91,7 @@ bool httpGet(const char* url, Fn&& parseBody, bool idfBundle = false) {
     ok = parseBody(r);
   }
   char err[100] = "";
-  if (code < 0) tls.lastError(err, sizeof err);
+  if (code < 0 && trust != Trust::PlainHttp) tls.lastError(err, sizeof err);
   Serial.printf("[net] GET %s -> %d%s %s (heap %lu, block %lu, stack free %u)\n", url, code, code == 200 && !ok ? " parse failed" : "", err,
                 (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMaxAllocHeap(), (unsigned)uxTaskGetStackHighWaterMark(nullptr));
   http.end();
@@ -130,7 +134,7 @@ bool fetchAircraft(const Position& p) {
   char url[128];
   int nm = (int)ceilf(cfg.airRadiusKm / 1.852f);
   snprintf(url, sizeof url, "https://" ADSB_HOST "/v2/point/%.2f/%.2f/%d", p.lat, p.lon, nm > 250 ? 250 : nm);
-  bool ok = httpGet(url, [&](NetReader& r) { return parse::aircraft(r, p.lat, p.lon, buf); }, true);
+  bool ok = httpGet(url, [&](NetReader& r) { return parse::aircraft(r, p.lat, p.lon, buf); }, Trust::Bundle);
   Lock l;
   buf.ok = ok;
   buf.fetchedMs = millis();
@@ -152,6 +156,31 @@ bool fetchFollowed() {
   return true;
 }
 
+// Demo drive: a loop on real roads through three random points 1.5-3 km around the start, routed by the public OSRM
+// demo server (OpenStreetMap data, © OpenStreetMap contributors). One request per boot; three tries at most.
+bool fetchDemoRoute(double lat, double lon) {
+  static float la[Shared::kRouteMax], lo[Shared::kRouteMax];
+  char url[320];
+  lat = round(lat * 1000) / 1000;  // ~100 m: the request goes out unencrypted
+  lon = round(lon * 1000) / 1000;
+  int n = snprintf(url, sizeof url, "http://router.project-osrm.org/route/v1/driving/%.5f,%.5f", lon, lat);
+  float b0 = (float)(esp_random() % 360);
+  for (int i = 0; i < 3; i++) {
+    float b = (b0 + i * 120 + (float)(esp_random() % 41) - 20) * (float)geo::kDeg, km = 1.5f + (esp_random() % 1500) / 1000.f;
+    n += snprintf(url + n, sizeof url - n, ";%.5f,%.5f", lon + km * sinf(b) / (111.32 * cos(lat * geo::kDeg)), lat + km * cosf(b) / 111.32);
+  }
+  snprintf(url + n, sizeof url - n, ";%.5f,%.5f?overview=full&geometries=polyline", lon, lat);
+  int count = 0;
+  bool ok = httpGet(url, [&](NetReader& r) { return (count = parse::route(r, la, lo, Shared::kRouteMax)) >= 2; }, Trust::PlainHttp);
+  Lock l;
+  if (ok) {
+    memcpy(g.routeLat, la, sizeof la);
+    memcpy(g.routeLon, lo, sizeof lo);
+    g.routeCount = count;
+  }
+  return ok;
+}
+
 void updateStatus(bool connected) {
   Lock l;
   g.net.wifi = connected;
@@ -171,7 +200,8 @@ void netTask(void*) {
     Lock l;
     g.portalRequested = true;
   }
-  uint32_t bootMs = millis(), lastIp = 0, lastFollow = 0, lastStations = 0, lastAir = 0;
+  uint32_t bootMs = millis(), lastIp = 0, lastFollow = 0, lastStations = 0, lastAir = 0, lastRoute = 0;
+  int routeTries = 0;
   bool timeStarted = false, mdns = false;
   Position lastStationsPos;
   bool airWanted = cfg.enabled(SCR_AIR) || cfg.enabled(SCR_DRIVE);
@@ -223,6 +253,23 @@ void netTask(void*) {
     if (!ipValid && (lastIp == 0 || now - lastIp > 15000)) {
       lastIp = now;
       fetchIpPosition();
+    }
+    {
+      bool want;
+      double dl, dn;
+      {
+        Lock l;
+        want = g.demoRouteWanted && !g.routeCount && !g.routeFailed;
+        dl = g.demoLat;
+        dn = g.demoLon;
+      }
+      if (want && (lastRoute == 0 || now - lastRoute > 20000)) {
+        lastRoute = now;
+        if (!fetchDemoRoute(dl, dn) && ++routeTries >= 3) {
+          Lock l;
+          g.routeFailed = true;
+        }
+      }
     }
     if (cfg.followCall()[0] && (lastFollow == 0 || now - lastFollow > FOLLOW_POLL_MS)) {
       lastFollow = now;

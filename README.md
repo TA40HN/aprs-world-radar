@@ -59,7 +59,8 @@ On first boot (or when no saved Wi-Fi is reachable for a minute) the device open
 - your callsign, the tracker to follow, home coordinates
 - which screens to show, search radius, rotation time
 - language (English / Türkçe), units, brightness and night dimming, time zone
-- GPS, trail recording, buzzer, and **demo drive** (a simulated drive for shows and testing without a GPS module)
+- GPS, trail recording, buzzer, and **demo drive**: for shows and for testing without a GPS module, it drives a loop on
+  real roads around you, routed by the public [OSRM](https://project-osrm.org) server on OpenStreetMap data
 
 Once connected, the same page is at `http://aprs-radar.local`, together with **drive trails** to download as GPX or
 JSON.
@@ -70,7 +71,8 @@ point; holding again restarts.
 ## Privacy
 
 Requests carry your position rounded to about 1 km (two decimals). They go only to `api.aprs.world`, `aprs.world`
-(the connection-location lookup) and `api.adsb.lol`. Drive trails stay on the device until you download them.
+(the connection-location lookup) and `api.adsb.lol`. Demo drive also asks `router.project-osrm.org` once per boot, over
+plain HTTP because that server only speaks TLS 1.3; the position it sends is rounded to about 100 m. Drive trails stay on the device until you download them.
 
 ## Development
 
@@ -85,4 +87,5 @@ Requests carry your position rounded to about 1 km (two decimals). They go only 
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). Aircraft data © adsb.lol contributors, ODbL 1.0. Font: Inter, SIL OFL 1.1.
+MIT, see [LICENSE](LICENSE). Aircraft data © adsb.lol contributors, ODbL 1.0. Demo routes © OpenStreetMap contributors
+(ODbL), routed by OSRM. Font: Inter, SIL OFL 1.1.
