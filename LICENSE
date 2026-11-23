@@ -19,10 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-Third-party parts:
-- src/fonts_vlw.h is generated from the Inter typeface by Rasmus Andersson (SIL Open Font License 1.1).
-- Libraries fetched at build time keep their own licences: LovyanGFX (FreeBSD), ArduinoJson (MIT),
-  TinyGPSPlus (LGPL-2.1), Sgp4 by Hopperpop (MIT).
-- Aircraft data: adsb.lol, Open Database License (ODbL) 1.0. APRS data: aprs.world. Demo-drive roads: © OpenStreetMap
-  contributors (ODbL), routed by the OSRM demo server.

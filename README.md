@@ -100,11 +100,14 @@ plain HTTP because that server only speaks TLS 1.3; the position it sends is rou
 - `tools/make_fonts.py` regenerates `src/fonts_data.h`: Inter with Turkish letters, drawn by `Canvas::text` straight
   into the frame buffer.
 - `tools/make_roots.py` regenerates `src/ca_roots.h`, the trusted roots for aprs.world.
-- The 240×240 frame is drawn in two 120-row strips: a full RGB565 frame (115 KB) is larger than the biggest free heap
-  block of a WROOM-32.
+- The 240×240 frame is drawn in three 80-row strips: a full RGB565 frame (115 KB) is larger than the biggest free heap
+  block of a WROOM-32, and taller strips starve the TLS handshakes.
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). SGP4 orbit model: Hopperpop Sgp4 library (MIT). Orbit data: CelesTrak. Aircraft data ©
-adsb.lol contributors, ODbL 1.0. Demo routes © OpenStreetMap contributors
-(ODbL), routed by OSRM. Font: Inter, SIL OFL 1.1.
+MIT, see [LICENSE](LICENSE). Third-party parts keep their own licences:
+
+- Font: Inter by Rasmus Andersson, SIL Open Font License 1.1 (`src/fonts_data.h` is generated from it).
+- Libraries fetched at build time: LovyanGFX (FreeBSD), ArduinoJson (MIT), TinyGPSPlus (LGPL-2.1), Sgp4 by Hopperpop (MIT).
+- Data: aircraft © adsb.lol contributors (ODbL 1.0); orbits from CelesTrak; APRS data from aprs.world; demo-drive roads
+  © OpenStreetMap contributors (ODbL), routed by the OSRM demo server.
