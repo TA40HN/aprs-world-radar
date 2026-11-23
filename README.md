@@ -5,6 +5,11 @@ radar sweep, a driving dashboard with your drive trail, and your own station car
 [aprs.world](https://aprs.world) and [adsb.lol](https://adsb.lol). It works at home over Wi-Fi and in the car over a
 phone hotspot.
 
+![Screens: APRS radar, air traffic, drive, trail, messages, weather, satellite, my station](docs/screens.png)
+
+Screens rendered by the firmware's own drawing code in the simulator (`pio run -e sim`); the device shows the same
+pixels.
+
 | Screen | What it shows |
 |---|---|
 | APRS radar | Stations around you with afterglow blips (colour = station type), nearest callsigns, auto-zoom; heading-up while driving |
@@ -30,7 +35,7 @@ coordinates → the city-level location of your internet connection. With no set
 - 1.3" 240×240 ST7789 SPI display without a CS pin (e.g. GoldenMorning GMT130)
 - Optional: NEO-6M / NEO-M8N GPS module, a push button, a buzzer
 
-### Wiring / Bağlantı
+### Wiring
 
 | Display | ESP32 | | GPS | ESP32 |
 |---|---|---|---|---|
@@ -89,8 +94,9 @@ point; holding again restarts.
 Requests carry your position rounded to about 1 km (two decimals). They go only to `api.aprs.world`, `aprs.world`
 (the connection-location lookup), `api.adsb.lol` and `celestrak.org` (orbit data, no position). With APRS-IS on, the
 device keeps one connection to `rotate.aprs2.net` filtered to messages for your callsign; your exact position goes there
-only when you turn the tracker on. Demo drive also asks `router.project-osrm.org` once per boot, over
-plain HTTP because that server only speaks TLS 1.3; the position it sends is rounded to about 100 m. Drive trails stay on the device until you download them.
+only when you turn the tracker on. Demo drive also asks `router.project-osrm.org` once per boot, over plain HTTP
+because that server only speaks TLS 1.3; the position it sends is rounded to about 100 m. Drive trails stay on the
+device until you download them.
 
 ## Development
 
