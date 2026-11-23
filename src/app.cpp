@@ -31,6 +31,8 @@ AprsIsStatus dAprsis;
 Weather dWx;
 SatPass dSat;
 uint32_t seenMsgVersion = 0;
+uint32_t msgAnimStart = 0;  // millis() of the last new message; the envelope plays for kMsgAnimMs
+constexpr uint32_t kMsgAnimMs = 1200;
 uint32_t seenVersion = UINT32_MAX;
 
 ScreenId screen = SCR_APRS;
@@ -350,6 +352,7 @@ UiState baseState(const Position& pos) {
   }
   s.nowMs = millis();
   s.localMin = localMinutes();
+  if (msgAnimStart && s.nowMs - msgAnimStart < kMsgAnimMs) s.msgAnim = (s.nowMs - msgAnimStart) / (float)kMsgAnimMs;
   s.screen = screen;
   s.gpsSats = cfg.gps && gps.charsProcessed() > 20 ? (int)gps.satellites.value() : -1;
   return s;
@@ -447,6 +450,7 @@ void loop() {
       screen = SCR_MSG;
       screenSinceMs = now;
       pauseCycleUntil = now + 30000;
+      msgAnimStart = now ? now : 1;
     }
     if (cfg.buzzer) {
       tone(PIN_BUZZER, 2000, 90);

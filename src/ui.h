@@ -27,6 +27,7 @@ struct UiState {
   char portalSsid[33] = {0};
   char portalIp[16] = {0};
   bool portal = false;
+  float msgAnim = -1;  // 0..1 while the new-message animation plays
 };
 
 void drawFrame(Canvas& c, const UiState& s);

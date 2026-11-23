@@ -684,9 +684,44 @@ int wrapText(Canvas& c, const char* text, int x, int y, int width, int maxLines,
   return lines;
 }
 
+// New-message animation (~1 s, `t` 0..1): the envelope fades in, its flap swings open, the letter slides out with
+// the sender's callsign on it.
+void envelope(Canvas& c, float t, const AprsMessage& m) {
+  auto phase = [&](float a, float b) { return t <= a ? 0.f : t >= b ? 1.f : (t - a) / (b - a); };
+  float in = phase(0.f, 0.25f), open = phase(0.25f, 0.5f), out = phase(0.5f, 0.85f);
+  out = 1 - (1 - out) * (1 - out);  // ease out
+  const int x0 = 48, x1 = 192, top = 100, bot = 190, mid = 120;
+  Color body = mix(BG, 0x0E5A51, in), flapCol = mix(BG, ACCENT, in), edge = mix(BG, 0x0A403A, in);
+  float ring = phase(0.3f, 1.f);
+  if (ring > 0) c.circle(mid, 140, (int)(60 + ring * 60), mix(BG, ACCENT_DIM, 1 - ring));
+  c.fillRect(x0, top, x1 - x0, bot - top, body);  // back of the envelope
+  float tipY = top + 50 - open * 100;  // closed: tip inside (y 150); open: tip above (y 50)
+  if (open >= 0.5f) c.triangle(x0, top, x1, top, mid, (int)tipY, mix(flapCol, ACCENT_DIM, 0.4f));  // flap, now behind
+  if (open > 0.6f || out > 0) {  // the letter
+    int ly = (int)(top + 6 - out * 78);
+    c.fillRoundRect(x0 + 12, ly, x1 - x0 - 24, 84, 5, 0xF4FFFD);
+    c.text(m.from, mid, ly + 18, &fontTitle, 0x0B2B2A, D_MC);
+    char preview[24];
+    snprintf(preview, sizeof preview, "%.18s", m.text);
+    c.text(preview, mid, ly + 38, &fontSmall, 0x3C5E5A, D_MC);
+  }
+  // Front pockets cover the lower part of the letter
+  c.triangle(x0, top, x0, bot, mid, 148, edge);
+  c.triangle(x1, top, x1, bot, mid, 148, edge);
+  c.triangle(x0, bot, x1, bot, mid, 142, body);
+  c.line(x0, bot, mid, 142, mix(BG, ACCENT_DIM, in));
+  c.line(x1, bot, mid, 142, mix(BG, ACCENT_DIM, in));
+  if (open < 0.5f) c.triangle(x0, top, x1, top, mid, (int)tipY, flapCol);  // flap still folded down, in front
+}
+
 void screenMessages(Canvas& c, const UiState& s) {
   uint8_t L = s.cfg->lang;
   header(c, s, tr(S::TitleMsg, L));
+  if (s.msgAnim >= 0 && s.messages->count) {
+    envelope(c, s.msgAnim, s.messages->items[0]);
+    footer(c, nullptr);
+    return;
+  }
   const AprsIsStatus& st = *s.aprsis;
   char status[48];
   Color dot = MUTED;

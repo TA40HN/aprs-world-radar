@@ -199,6 +199,13 @@ int main() {
   s.screen = SCR_AIR; render(strip, full, s, "2_air");
   s.screen = SCR_STATION; render(strip, full, s, "5_station");
   s.screen = SCR_MSG; render(strip, full, s, "8_messages");
+  for (float t : {0.15f, 0.4f, 0.6f, 0.9f}) {
+    char name[32];
+    snprintf(name, sizeof name, "8_envelope_%02d", (int)(t * 100));
+    s.msgAnim = t;
+    render(strip, full, s, name);
+  }
+  s.msgAnim = -1;
   s.screen = SCR_WX; render(strip, full, s, "9_weather");
   s.screen = SCR_SAT; render(strip, full, s, "10_sat");
   { int64_t keep = s.epoch; s.epoch = sat.aos + 200; render(strip, full, s, "10_sat_live"); s.epoch = keep; }
